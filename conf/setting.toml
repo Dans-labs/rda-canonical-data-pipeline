@@ -1,0 +1,34 @@
+[default]
+
+api_prefix = "/api/v1"
+expose_port = 1912
+build_date = "unknown"
+rcdp_service_api_key = "changeme"
+
+# Database
+db_user = "rda"
+db_password = "change_me_password"
+db_host = "postgres"
+db_port = 5432
+db_name = "rda"
+
+# Email / SMTP (optional)
+mail_host = "maildev"
+mail_port = 1025
+mail_usr = ""
+mail_pass = ""
+mail_from = "e.indarto@gmail.com"
+mail_to = ["eko.indarto@dans.knaw.nl"]
+mail_use_tls = true
+mail_use_ssl = false
+mail_use_auth = false
+
+reload_enable = true
+
+# Logging
+log_level = 10
+log_file = "@format {env[BASE_DIR]}/logs/rcdp.log"
+log_format = '%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s'
+
+# Other
+otlp_enable = false

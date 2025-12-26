@@ -1,0 +1,30 @@
+services:
+
+  maildev:
+    image: maildev/maildev
+    container_name: maildev
+    ports:
+      - "1080:1080"
+      - "1025:1025"
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=rda
+      - POSTGRES_PASSWORD=my_secret_password
+      - POSTGRES_DB=rda
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U acp" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+
+volumes:
+  postgres-data:

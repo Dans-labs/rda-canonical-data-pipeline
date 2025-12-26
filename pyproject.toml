@@ -1,0 +1,17 @@
+[project]
+name = "rda-canonical-data-pipeline"
+version = "0.1.0"
+description = "A transaction-safe data pipeline that cleans, synchronizes, and indexes data from PostgreSQL and external APIs into Elasticsearch."
+authors = [
+    {name = "Eko Indarto", email = "eko.indarto@dans.knaw.nl"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "elasticsearch>=9.2.1",
+    "fastapi>=0.127.0",
+    "pandas>=2.3.3",
+    "psycopg2-binary>=2.9.11",
+    "requests>=2.32.5",
+    "uvicorn>=0.40.0",
+]
