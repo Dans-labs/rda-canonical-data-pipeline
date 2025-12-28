@@ -6,11 +6,11 @@ build_date = "unknown"
 rcdp_service_api_key = "changeme"
 
 # Database
-db_user = "rda"
-db_password = "change_me_password"
-db_host = "postgres"
-db_port = 5432
-db_name = "rda"
+#db_user = "rda"
+#db_password = "change_me_password"
+#db_host = "localhost"
+#db_port = 5432
+#db_name = "rda"
 
 # Email / SMTP (optional)
 mail_host = "maildev"
