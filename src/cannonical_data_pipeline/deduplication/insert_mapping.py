@@ -5,6 +5,9 @@ import sys
 import traceback
 from pathlib import Path
 
+import re
+import io
+
 import psycopg2
 
 from src.cannonical_data_pipeline.infra.db import get_conn_params
@@ -17,7 +20,68 @@ def insert_mapping_csv(csv_path=None, dry_run=False):
 
     Returns a dict report: {inserted: int, errors: [str], error: None or msg, details: optional}
     """
-    report = {'inserted': 0, 'errors': [], 'error': None}
+    report = {'inserted': 0, 'errors': [], 'error': None, 'auto_fixed': 0, 'auto_fixed_examples': []}
+
+    def _try_split_concatenated(orig: str):
+        """Heuristic: if a field contains two concatenated values (no comma), try to split where a lower->Upper transition occurs.
+
+        Returns (orig_part, norm_part) or None if not found.
+        """
+        if not orig or len(orig) < 10:
+            return None
+        # find a position where a lowercase/number is followed by uppercase (likely concatenation boundary)
+        m = re.search(r'(?<=[a-z0-9])(?=[A-Z])', orig)
+        if not m:
+            # try later occurrences: search for any such boundary after first 8 chars
+            for i in range(8, len(orig)-8):
+                if orig[i].islower() or orig[i].isdigit():
+                    if orig[i+1].isupper():
+                        idx = i+1
+                        # ensure both parts are reasonably long
+                        if idx > 5 and len(orig) - idx > 3:
+                            left = orig[:idx].strip()
+                            right = orig[idx:].strip()
+                            return left, right
+            return None
+        idx = m.start()
+        # Ensure sensible split (both parts have length)
+        if idx < 3 or len(orig) - idx < 3:
+            return None
+        left = orig[:idx].strip()
+        right = orig[idx:].strip()
+        # Basic sanity: both parts contain letters
+        if any(c.isalpha() for c in left) and any(c.isalpha() for c in right):
+            return left, right
+        return None
+        # Fallback: detect if the start of the string repeats later (duplicated concatenation)
+        try:
+            compact = re.sub(r"\W+", '', orig).lower()
+            if len(compact) > 20:
+                # try to find a later position where a prefix of the compacted string appears
+                max_prefix = min(40, len(compact)//2)
+                for pref_len in range(max_prefix, 6, -1):
+                    prefix = compact[:pref_len]
+                    idx = compact.find(prefix, 5)
+                    if idx > 5:
+                        # map compact index back to original string index
+                        # find the corresponding position in original by searching for the substring of prefix in orig
+                        # use a heuristic search for the first occurrence after middle
+                        orig_search = re.sub(r"\s+", ' ', orig)
+                        # try to locate the prefix's first few chars in the original tail
+                        tail_scan = re.sub(r"\W+", '', orig)
+                        # find approximate split position by scanning original for a boundary where next chars match prefix start
+                        for j in range(max(5, len(orig)//3), len(orig)-5):
+                            # build candidate tail starting at j, compacted
+                            candidate_compact = re.sub(r"\W+", '', orig[j:j+pref_len+20]).lower()
+                            if candidate_compact.startswith(prefix[:min(10, len(prefix))]):
+                                left = orig[:j].strip()
+                                right = orig[j:].strip()
+                                if len(left) > 3 and len(right) > 3:
+                                    return left, right
+                        # fallback if not found continue trying smaller prefix
+        except Exception:
+            pass
+        return None
 
     # Resolve csv_file from provided CLI path or from app_settings.data_institution_mapping
     csv_file = None
@@ -84,19 +148,38 @@ def insert_mapping_csv(csv_path=None, dry_run=False):
         report['error'] = f"CSV file not found. Tried paths: {tried}"
         return report
 
+    # Read file content and apply safe repair for malformed lines where a closing quote is directly followed by a character
+    try:
+        raw_text = csv_file.read_text(encoding='utf-8')
+    except Exception as exc:
+        report['error'] = f"Failed to read CSV: {exc}"
+        report['details'] = traceback.format_exc()
+        return report
+
+    # Repair heuristic: insert a missing comma after a closing quote if immediately followed by an alphanumeric (no comma)
+    # Pattern: "\s*(?=[A-Za-z0-9])  -> replace with ",
+    repaired_text = re.sub(r'"\s*(?=[A-Za-z0-9])', '",', raw_text)
+    repair_applied = repaired_text != raw_text
+    try:
+        print(f"[debug] csv_repair_applied={repair_applied}", file=sys.stderr)
+    except Exception:
+        pass
+
+    # Use StringIO for csv parsing
+    fobj = io.StringIO(repaired_text)
+
     # If dry_run, just parse and count rows to validate CSV
     if dry_run:
         try:
             count = 0
-            with csv_file.open(newline='', encoding='utf-8') as f:
-                reader = csv.DictReader(f, delimiter=',', quotechar='"')
-                for _ in reader:
-                    count += 1
+            reader = csv.DictReader(fobj, delimiter=',', quotechar='"')
+            for _ in reader:
+                count += 1
             report['inserted'] = 0
             report['found_rows'] = count
             return report
         except Exception as exc:
-            report['error'] = f"Failed to read CSV: {exc}"
+            report['error'] = f"Failed to parse CSV in dry-run: {exc}"
             report['details'] = traceback.format_exc()
             return report
 
@@ -129,34 +212,44 @@ def insert_mapping_csv(csv_path=None, dry_run=False):
             except Exception:
                 pass
 
-        with csv_file.open(newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f, delimiter=',', quotechar='"')
-            for row in reader:
+        # Reset StringIO cursor to start for parsing
+        fobj.seek(0)
+        reader = csv.DictReader(fobj, delimiter=',', quotechar='"')
+
+        for row in reader:
+            try:
+                orig = row.get('original')
+                norm = row.get('normalized')
+                # If normalized is missing, try heuristic split from original
+                if (norm is None or str(norm).strip() == '') and isinstance(orig, str):
+                    split = _try_split_concatenated(orig)
+                    if split:
+                        orig, norm = split
+                        report['auto_fixed'] += 1
+                        if len(report['auto_fixed_examples']) < 5:
+                            report['auto_fixed_examples'].append({'before': row, 'after': {'original': orig, 'normalized': norm}})
+                # Skip rows without required data
+                if orig is None or norm is None:
+                    report['errors'].append(f"missing columns in row: {row}")
+                    continue
+                # Upsert: update normalized when original already exists
+                cur.execute(
+                    """
+                    INSERT INTO institution_mapping ("original", "normalized")
+                    VALUES (%s, %s)
+                    ON CONFLICT (original) DO UPDATE SET normalized = EXCLUDED.normalized
+                    """,
+                    (orig, norm)
+                )
+                report['inserted'] += 1
+            except Exception as exc_row:
+                # record the error and continue with next row
+                report['errors'].append(f"row error {row}: {exc_row}")
                 try:
-                    orig = row.get('original')
-                    norm = row.get('normalized')
-                    # Skip rows without required data
-                    if orig is None or norm is None:
-                        report['errors'].append(f"missing columns in row: {row}")
-                        continue
-                    # Upsert: update normalized when original already exists
-                    cur.execute(
-                        """
-                        INSERT INTO institution_mapping ("original", "normalized")
-                        VALUES (%s, %s)
-                        ON CONFLICT (original) DO UPDATE SET normalized = EXCLUDED.normalized
-                        """,
-                        (orig, norm)
-                    )
-                    report['inserted'] += 1
-                except Exception as exc_row:
-                    # record the error and continue with next row
-                    report['errors'].append(f"row error {row}: {exc_row}")
-                    try:
-                        conn.rollback()
-                        cur = conn.cursor()
-                    except Exception:
-                        pass
+                    conn.rollback()
+                    cur = conn.cursor()
+                except Exception:
+                    pass
         # commit all successful inserts (those not rolled back)
         try:
             conn.commit()
