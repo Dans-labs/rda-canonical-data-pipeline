@@ -25,6 +25,8 @@ mail_use_auth = false
 
 reload_enable = true
 
+
+
 # Logging
 log_level = 10
 log_file = "@format {env[BASE_DIR]}/logs/rcdp.log"
@@ -32,6 +34,8 @@ log_format = '%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s'
 
 #data
 data_institution_mapping = "@format {env[BASE_DIR]}/resources/data/mapping/institution_mapping.csv"
+
+db_dialect="postgresql+psycopg2"
 
 # Other
 otlp_enable = false

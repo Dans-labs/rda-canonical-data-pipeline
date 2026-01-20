@@ -1,19 +1,23 @@
 [project]
 name = "rda-canonical-data-pipeline"
+title = "RDA Canonical Data Pipeline"
 version = "0.1.0"
 description = "A transaction-safe data pipeline that cleans, synchronizes, and indexes data from PostgreSQL and external APIs into Elasticsearch."
 authors = [
     {name = "Eko Indarto", email = "eko.indarto@dans.knaw.nl"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12.8"
 dependencies = [
+    "akmi-utils>=0.1.9.0",
     "dynaconf>=3.2.12",
     "elasticsearch>=9.2.1",
+    "emoji>=2.15.0",
     "fastapi>=0.127.0",
     "pandas>=2.3.3",
     "psycopg2-binary>=2.9.11",
     "pytest>=9.0.2",
+    "python-keycloak>=7.0.0",
     "requests>=2.32.5",
     "tomli>=2.3.0",
     "uvicorn>=0.40.0",

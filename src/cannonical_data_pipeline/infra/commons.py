@@ -1,20 +1,34 @@
 import logging
 import os
+import smtplib
+import time
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
+import akmi_utils as a_commons
 import tomli
 from dynaconf import Dynaconf
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import time
 
-# compute repository root (three levels up from infra/commons.py)
-_repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# only set BASE_DIR if not already set in the environment
-if not os.environ.get("BASE_DIR"):
-    os.environ["BASE_DIR"] = _repo_root
+# Determine project root (BASE_DIR). Prefer an explicit env var, otherwise search upwards
+base_dir = os.getenv("BASE_DIR")
 
-_raw_app_settings = Dynaconf(root_path=f'{os.environ["BASE_DIR"]}/conf', settings_files=["*.toml"],
+def _find_project_root(start_path: str, markers=('pyproject.toml', 'conf', '.git')) -> str:
+    p = os.path.abspath(start_path)
+    while True:
+        for m in markers:
+            if os.path.exists(os.path.join(p, m)):
+                return p
+        parent = os.path.dirname(p)
+        if parent == p:
+            # fallback: go up four levels from this file (best-effort)
+            return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        p = parent
+
+if not base_dir:
+    base_dir = _find_project_root(os.path.dirname(os.path.abspath(__file__)))
+    os.environ["BASE_DIR"] = base_dir
+
+app_settings = Dynaconf(root_path=os.path.join(os.environ["BASE_DIR"], 'conf'), settings_files=["*.toml"],
                     environments=True)
 
 def get_project_details(base_dir: str, keys: list):
@@ -23,90 +37,6 @@ def get_project_details(base_dir: str, keys: list):
     poetry = package_details['project']
     return {key: poetry[key] for key in keys}
 
-class SettingsWrapper:
-    """Wrap dynaconf object and provide attribute-style access with fallbacks.
-
-    - getattr -> try attribute, then .get(), then env var uppercase
-    - get(name, default) -> dynaconf.get then env var fallback
-    """
-
-    def __init__(self, wrapped):
-        self._wrapped = wrapped
-
-    def __getattr__(self, name: str):
-        # Try attribute access first
-        try:
-            return getattr(self._wrapped, name)
-        except Exception:
-            pass
-        # Try .get() fallback
-        try:
-            v = self._wrapped.get(name)
-            if v is not None:
-                return v
-        except Exception:
-            pass
-        # Fallback to environment variable (uppercase)
-        env_key = name.upper()
-        if env_key in os.environ:
-            return os.environ[env_key]
-        # If setting is missing, return None (don't raise) so code importing module at import-time won't fail
-        return None
-
-    def get(self, name, default=None):
-        try:
-            v = self._wrapped.get(name)
-            if v is not None:
-                return v
-        except Exception:
-            pass
-        return os.environ.get(name.upper(), default)
-
-
-# Export a wrapped settings object used across the project
-app_settings = SettingsWrapper(_raw_app_settings)
-
-
-def _normalize_prefix(raw: str | None, default: str = "/api/v1") -> str:
-    if not raw:
-        return default
-    p = raw.strip()
-    if not p:
-        return default
-    # ensure single leading slash and no trailing slash (root stays "/")
-    return "/" + p.strip("/")
-
-# safe lookup from dynaconf settings, falling back to env var and default
-API_PREFIX = getattr(app_settings, "API_PREFIX", None) or app_settings.get("API_PREFIX", None) or os.environ.get("API_PREFIX", None)
-API_PREFIX = _normalize_prefix(API_PREFIX)
-
-
-def _as_bool(val, default=False):
-    if isinstance(val, bool):
-        return val
-    if val is None:
-        return default
-    s = str(val).strip().lower()
-    if s in ("1", "true", "yes", "y", "on"):
-        return True
-    if s in ("0", "false", "no", "n", "off"):
-        return False
-    return default
-
-
-def _normalize_mail_to(raw):
-    # Accept list or comma-separated string
-    if raw is None:
-        return []
-    if isinstance(raw, (list, tuple)):
-        return [r for r in raw if r]
-    if isinstance(raw, str):
-        # support JSON-like list strings? best-effort: split on commas
-        parts = [p.strip() for p in raw.split(",")]
-        return [p for p in parts if p]
-    return []
-
-
 def send_mail(subject: str, body: str, to: list | None = None, from_addr: str | None = None) -> bool:
     mail_host = app_settings.get("mail_host") or os.environ.get("MAIL_HOST") or "smtp.gmail.com"
     try:
@@ -114,19 +44,15 @@ def send_mail(subject: str, body: str, to: list | None = None, from_addr: str | 
     except Exception:
         mail_port = 587
 
-    mail_use_tls = _as_bool(app_settings.get("mail_use_tls", os.environ.get("MAIL_USE_TLS", True)))
-    mail_use_ssl = _as_bool(app_settings.get("mail_use_ssl", os.environ.get("MAIL_USE_SSL", False)))
-    mail_use_auth = _as_bool(app_settings.get("mail_use_auth", os.environ.get("MAIL_USE_AUTH", False)))
+    mail_use_tls = app_settings.get("mail_use_tls", os.environ.get("MAIL_USE_TLS", True))
+    mail_use_ssl = app_settings.get("mail_use_ssl", os.environ.get("MAIL_USE_SSL", False))
+    mail_use_auth = app_settings.get("mail_use_auth", os.environ.get("MAIL_USE_AUTH", False))
 
     mail_usr = app_settings.get("mail_usr") or os.environ.get("MAIL_USR")
     mail_pass = app_settings.get("mail_pass") or os.environ.get("MAIL_PASS")
 
-    mail_to_raw = to if to is not None else app_settings.get("mail_to") or os.environ.get("MAIL_TO")
-    mail_to = _normalize_mail_to(mail_to_raw)
+    mail_to = app_settings.get("mail_to", os.environ.get("MAIL_TO"))
 
-    if not mail_to:
-        logging.error("No recipient specified for email. mail_to=%s", mail_to_raw)
-        return False
 
     from_addr = from_addr or app_settings.get("mail_from") or os.environ.get("MAIL_FROM") or mail_usr or "no-reply@example.com"
 

@@ -15,8 +15,8 @@ RUN apt-get update -y && \
 
 RUN useradd -ms /bin/bash akmi
 
-ENV PYTHONPATH=/home/akmi/cdp/src
-ENV BASE_DIR=/home/akmi/cdp
+ENV PYTHONPATH=/home/akmi/rcdp/src
+ENV BASE_DIR=/home/akmi/rcdp
 
 WORKDIR ${BASE_DIR}
 
@@ -30,7 +30,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Create and activate virtual environment
 RUN python -m venv .venv
 ENV APP_NAME="RDA Cannonical Data Service"
-ENV PATH="/home/akmi/cdp/.venv/bin:$PATH"
+ENV PATH="/home/akmi/rcdp/.venv/bin:$PATH"
 # Copy the application into the container.
 COPY src ./src
 COPY resources ./resources
