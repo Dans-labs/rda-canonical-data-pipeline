@@ -12,6 +12,10 @@ rcdp_service_api_key = "changeme"
 #db_port = 5432
 #db_name = "rda"
 
+# Provide a DB_URL so Dynaconf `app_settings.DB_URL` is available inside the container
+# Override with environment variables or secrets in production as needed.
+db_url = "postgresql+psycopg2://rda:my_secret_password@postgres:5432/rda"
+
 # Email / SMTP (optional)
 mail_host = "maildev"
 mail_port = 1025

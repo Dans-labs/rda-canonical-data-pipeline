@@ -7,11 +7,11 @@ services:
       - "1080:1080"
       - "1025:1025"
 
-  postgres:
+  rcdp-postgres:
     image: postgres:15
-    container_name: postgres
+    container_name: rcdp-postgres
     environment:
-      - POSTGRES_USER=rda
+      - POSTGRES_USER=rcdp
       - POSTGRES_PASSWORD=my_secret_password
       - POSTGRES_DB=rda
     ports:
@@ -19,12 +19,49 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U acp" ]
+      test: [ "CMD-SHELL", "pg_isready -U rda" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
-
+  rcdp-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Use VERSION env var for the image tag. Falls back to 'latest' if VERSION is not set.
+    image: "ekoindarto/rcdp:${VERSION:-latest}"
+    container_name: rcdp-service
+    environment:
+      - EXPOSE_PORT=24895
+      - APP_NAME=RDA Service
+      - PYTHONPATH=/home/akmi/rcdp/src
+      - BASE_DIR=/home/akmi/rcdp
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=rda
+      - DB_USER=rda
+      - DB_PASSWORD=my_secret_password
+      - DB_URL=postgresql+psycopg2://rda:my_secret_password@postgres:5432/rda
+      - MAIL_HOST=maildev
+      - MAIL_PORT=1025
+    ports:
+      - "24895:24895"
+    volumes:
+      - ./data/db:/home/akmi/rcdp/data/db
+      - ./conf:/home/akmi/rcdp/conf
+      - ./logs/docker-logs:/home/akmi/rcdp/logs
+    depends_on:
+      rcdp-postgres:
+        condition: service_healthy
+      maildev:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:24895/api/v1/metrics/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   postgres-data:
