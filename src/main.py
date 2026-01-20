@@ -151,6 +151,15 @@ pre_startup_routine(app)
 app.include_router(metrics.router, prefix="/api/v1/metrics", tags=["metrics"])
 app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"])
 
+# Root endpoint: expose basic service info (title, version, build number)
+@app.get("/", tags=["root"])
+def root():
+    return {
+        "title": project_details.get("title"),
+        "version": project_details.get("version"),
+        "build": build_date,
+    }
+
 
 def main():
     try:
