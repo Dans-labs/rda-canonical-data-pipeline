@@ -1,7 +1,7 @@
 [project]
 name = "rda-canonical-data-pipeline"
 title = "RDA Canonical Data Pipeline"
-version = "0.1.0"
+version = "0.1.1"
 description = "A transaction-safe data pipeline that cleans, synchronizes, and indexes data from PostgreSQL and external APIs into Elasticsearch."
 authors = [
     {name = "Eko Indarto", email = "eko.indarto@dans.knaw.nl"}
