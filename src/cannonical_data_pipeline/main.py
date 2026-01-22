@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 # Ensure local `src` package is discoverable before importing it
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException, Depends

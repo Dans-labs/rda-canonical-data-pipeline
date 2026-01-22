@@ -18,8 +18,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Mount project resources so the init script can access the SQL dump
+      - ./resources/data/db:/docker-entrypoint-init-resources:ro
+      # Mount the conditional init script into the official init directory
+      - ./docker/postgres/01-conditional-restore.sh:/docker-entrypoint-initdb.d/01-conditional-restore.sh:ro
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U rda" ]
+      test: [ "CMD-SHELL", "pg_isready -U rcdp -d rda" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,9 +43,9 @@ services:
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=rda
-      - DB_USER=rda
+      - DB_USER=rcdp
       - DB_PASSWORD=my_secret_password
-      - DB_URL=postgresql+psycopg2://rda:my_secret_password@postgres:5432/rda
+      - DB_URL=postgresql+psycopg2://rcdp:my_secret_password@postgres:5432/rda
       - MAIL_HOST=maildev
       - MAIL_PORT=1025
     ports:
@@ -50,6 +54,7 @@ services:
       - ./data/db:/home/akmi/rcdp/data/db
       - ./conf:/home/akmi/rcdp/conf
       - ./logs/docker-logs:/home/akmi/rcdp/logs
+      - ./resources:/home/akmi/rcdp/resources:ro
     depends_on:
       rcdp-postgres:
         condition: service_healthy

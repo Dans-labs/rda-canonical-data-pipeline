@@ -10,10 +10,11 @@ import io
 
 import psycopg2
 
+from cannonical_data_pipeline.infra.commons import app_settings
 from src.cannonical_data_pipeline.infra.db import get_conn_params
 
 
-def insert_mapping_csv(csv_path=None, dry_run=False):
+def insert_mapping_csv(csv_path: str, dry_run=False):
     """Read CSV and insert into institution_mapping(original, normalized).
 
     If dry_run=True the function only parses the CSV and returns a count without connecting to DB.
@@ -27,128 +28,9 @@ def insert_mapping_csv(csv_path=None, dry_run=False):
 
         Returns (orig_part, norm_part) or None if not found.
         """
-        if not orig or len(orig) < 10:
-            return None
-        # find a position where a lowercase/number is followed by uppercase (likely concatenation boundary)
-        m = re.search(r'(?<=[a-z0-9])(?=[A-Z])', orig)
-        if not m:
-            # try later occurrences: search for any such boundary after first 8 chars
-            for i in range(8, len(orig)-8):
-                if orig[i].islower() or orig[i].isdigit():
-                    if orig[i+1].isupper():
-                        idx = i+1
-                        # ensure both parts are reasonably long
-                        if idx > 5 and len(orig) - idx > 3:
-                            left = orig[:idx].strip()
-                            right = orig[idx:].strip()
-                            return left, right
-            return None
-        idx = m.start()
-        # Ensure sensible split (both parts have length)
-        if idx < 3 or len(orig) - idx < 3:
-            return None
-        left = orig[:idx].strip()
-        right = orig[idx:].strip()
-        # Basic sanity: both parts contain letters
-        if any(c.isalpha() for c in left) and any(c.isalpha() for c in right):
-            return left, right
-        return None
-        # Fallback: detect if the start of the string repeats later (duplicated concatenation)
-        try:
-            compact = re.sub(r"\W+", '', orig).lower()
-            if len(compact) > 20:
-                # try to find a later position where a prefix of the compacted string appears
-                max_prefix = min(40, len(compact)//2)
-                for pref_len in range(max_prefix, 6, -1):
-                    prefix = compact[:pref_len]
-                    idx = compact.find(prefix, 5)
-                    if idx > 5:
-                        # map compact index back to original string index
-                        # find the corresponding position in original by searching for the substring of prefix in orig
-                        # use a heuristic search for the first occurrence after middle
-                        orig_search = re.sub(r"\s+", ' ', orig)
-                        # try to locate the prefix's first few chars in the original tail
-                        tail_scan = re.sub(r"\W+", '', orig)
-                        # find approximate split position by scanning original for a boundary where next chars match prefix start
-                        for j in range(max(5, len(orig)//3), len(orig)-5):
-                            # build candidate tail starting at j, compacted
-                            candidate_compact = re.sub(r"\W+", '', orig[j:j+pref_len+20]).lower()
-                            if candidate_compact.startswith(prefix[:min(10, len(prefix))]):
-                                left = orig[:j].strip()
-                                right = orig[j:].strip()
-                                if len(left) > 3 and len(right) > 3:
-                                    return left, right
-                        # fallback if not found continue trying smaller prefix
-        except Exception:
-            pass
-        return None
 
-    # Resolve csv_file from provided CLI path or from app_settings.data_institution_mapping
-    csv_file = None
-    mapping_cfg = None
-    # If CLI override provided, prefer that
-    if csv_path:
-        csv_file = Path(csv_path)
-    else:
-        # Prefer app_settings.data_institution_mapping
-        try:
-            from src.cannonical_data_pipeline.infra.commons import app_settings
-            mapping_cfg = app_settings.get('data_institution_mapping')
-        except Exception:
-            mapping_cfg = None
 
-        if mapping_cfg:
-            # mapping_cfg may contain Dynaconf @format/template markers like '@format {env[BASE_DIR]}/path'
-            try:
-                mc = mapping_cfg
-                if isinstance(mc, str) and mc.startswith('@format '):
-                    mc = mc[len('@format '):]
-                # substitute {env[BASE_DIR]} if present
-                if isinstance(mc, str) and '{env[BASE_DIR]}' in mc:
-                    base = os.environ.get('BASE_DIR')
-                    if not base:
-                        # repo root as fallback
-                        base = str(Path(__file__).resolve().parents[3])
-                    mc = mc.replace('{env[BASE_DIR]}', base)
-                csv_candidate = Path(mc)
-                # If relative path, resolve against repo root
-                if not csv_candidate.is_absolute():
-                    repo_root = Path(__file__).resolve().parents[3]
-                    csv_candidate = (repo_root / csv_candidate).resolve()
-                if csv_candidate.exists():
-                    csv_file = csv_candidate
-            except Exception:
-                csv_file = None
-
-    # If still not found, fall back to repo default path
-    if csv_file is None:
-        repo_root = Path(__file__).resolve().parents[3]
-        default_candidate = repo_root / 'resources' / 'data' / 'mapping' / 'institution_mapping.csv'
-        if default_candidate.exists():
-            csv_file = default_candidate
-
-    # Debug info: show resolved mapping_cfg and csv_file
-    try:
-        import sys as _sys
-        _mapping_cfg_repr = repr(mapping_cfg)
-        _resolved = str(csv_file) if csv_file is not None else None
-        _exists = csv_file.exists() if csv_file is not None else False
-        print(f"[debug] mapping_cfg={_mapping_cfg_repr} resolved={_resolved} exists={_exists}", file=_sys.stderr)
-    except Exception:
-        pass
-
-    # Final existence check
-    if csv_file is None or not csv_file.exists():
-        tried = []
-        if csv_path:
-            tried.append(str(csv_path))
-        if mapping_cfg:
-            tried.append(str(mapping_cfg))
-        tried.append(str(default_candidate if 'default_candidate' in locals() else 'resources/data/mapping/institution_mapping.csv'))
-        report['error'] = f"CSV file not found. Tried paths: {tried}"
-        return report
-
-    # Read file content and apply safe repair for malformed lines where a closing quote is directly followed by a character
+    csv_file = Path(csv_path)
     try:
         raw_text = csv_file.read_text(encoding='utf-8')
     except Exception as exc:
@@ -156,8 +38,6 @@ def insert_mapping_csv(csv_path=None, dry_run=False):
         report['details'] = traceback.format_exc()
         return report
 
-    # Repair heuristic: insert a missing comma after a closing quote if immediately followed by an alphanumeric (no comma)
-    # Pattern: "\s*(?=[A-Za-z0-9])  -> replace with ",
     repaired_text = re.sub(r'"\s*(?=[A-Za-z0-9])', '",', raw_text)
     repair_applied = repaired_text != raw_text
     try:
@@ -278,14 +158,30 @@ def insert_mapping_csv(csv_path=None, dry_run=False):
 
 
 if __name__ == '__main__':
-    import argparse
+    # Resolve mapping path from Dynaconf setting and ensure it exists before running
+    try:
+        mapping_cfg = app_settings.data_institution_mapping
+    except Exception:
+        mapping_cfg = None
 
-    parser = argparse.ArgumentParser(description='Insert mapping CSV into institution_mapping (or dry-run)')
-    parser.add_argument('--path', help='Path to CSV file (optional)')
-    parser.add_argument('--dry-run', dest='dry_run', action='store_true', help='Only parse CSV and count rows')
-    args = parser.parse_args()
+    resolved_path = None
+    if mapping_cfg:
+        mc = mapping_cfg
+        if isinstance(mc, str) and mc.startswith('@format '):
+            mc = mc[len('@format '):]
+        if '{env[BASE_DIR]}' in mc:
+            base = os.environ.get('BASE_DIR', str(Path(__file__).resolve().parents[3]))
+            mc = mc.replace('{env[BASE_DIR]}', base)
+        resolved_path = Path(mc).resolve()
+        if not resolved_path.exists():
+            print(f"CSV file not found at resolved path: {resolved_path}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("app_settings.data_institution_mapping is not configured", file=sys.stderr)
+        sys.exit(1)
 
-    res = insert_mapping_csv(csv_path=args.path, dry_run=args.dry_run)
+    # Run a dry-run to validate the CSV and report
+    res = insert_mapping_csv(csv_path=resolved_path, dry_run=False)
     print(json.dumps(res, indent=2, ensure_ascii=False))
     # exit non-zero on error
     if res.get('error'):
