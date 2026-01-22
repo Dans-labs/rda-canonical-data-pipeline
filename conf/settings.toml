@@ -14,7 +14,7 @@ rcdp_service_api_key = "changeme"
 
 # Provide a DB_URL so Dynaconf `app_settings.DB_URL` is available inside the container
 # Override with environment variables or secrets in production as needed.
-db_url = "postgresql+psycopg2://rda:my_secret_password@postgres:5432/rda"
+db_url = "postgresql+psycopg2://rcdp:my_secret_password@postgres:5432/rda"
 
 # Email / SMTP (optional)
 mail_host = "maildev"
