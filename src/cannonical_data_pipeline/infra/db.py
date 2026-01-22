@@ -43,7 +43,7 @@ def get_conn_params():
         return val, src
 
     host, s1 = _get_setting('db_host', 'DB_HOST', 'localhost')
-    port, s2 = _get_setting('db_port', 'DB_PORT', 5433)
+    port, s2 = _get_setting('db_port', 'DB_PORT', 5432)
     dbname, s3 = _get_setting('db_name', 'DB_NAME', 'rda')
     user, s4 = _get_setting('db_user', 'DB_USER', None)
     password, s5 = _get_setting('db_password', 'DB_PASSWORD', None)

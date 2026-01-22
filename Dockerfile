@@ -45,6 +45,6 @@ RUN uv venv .venv
 RUN uv sync --frozen --no-cache
 
 # Run the application.
-CMD ["python", "-m", "src.main"]
+CMD ["python", "-m", "src.cannonical_data_pipeline.main"]
 
 #CMD ["tail", "-f", "/dev/null"]
