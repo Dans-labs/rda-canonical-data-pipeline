@@ -1,11 +1,12 @@
 import json
 import psycopg2
+from psycopg2 import sql
 
 from src.cannonical_data_pipeline.infra.db import get_conn_params
 
 
 def list_tables(conn_params=None):
-    """Return a dict report with a list of public base table names in the DB."""
+    """Return a dict report with a list of public base table names and row counts in the DB."""
     params = conn_params or get_conn_params()
     conn = None
     try:
@@ -21,7 +22,18 @@ def list_tables(conn_params=None):
             )
             rows = cur.fetchall()
             tables = [r[0] for r in rows]
-        return {"tables": tables, "error": None}
+
+            # For each table, get the row count using safe identifier handling
+            tables_with_counts = []
+            for t in tables:
+                try:
+                    cur.execute(sql.SQL("SELECT COUNT(*) FROM {}" ).format(sql.Identifier(t)))
+                    cnt = cur.fetchone()[0]
+                except Exception:
+                    # If counting fails for any reason, report -1 to indicate unknown/error
+                    cnt = -1
+                tables_with_counts.append({"name": t, "rows": cnt})
+        return {"tables": tables_with_counts, "error": None}
     except Exception as exc:
         return {"tables": [], "error": str(exc)}
     finally:
@@ -42,4 +54,3 @@ def main(conn_params=None):
 
 if __name__ == '__main__':
     main()
-

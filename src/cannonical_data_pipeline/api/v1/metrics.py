@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Query
 from datetime import datetime
 from typing import Optional
+from src.cannonical_data_pipeline.deduplication import list_tables as list_tables_mod
 
 router = APIRouter(prefix="", tags=["metrics"])
 
@@ -146,3 +147,14 @@ def get_errors(since: Optional[str] = None, limit: int = Query(50, ge=1, le=1000
 def health():
     # Perform quick DB and ES pings
     return {"status": "OK", "checks": {"db": True, "es": True, "queue": True}}
+
+# GET /metrics/sync/list_tables
+# Purpose: return list of tables in public schema (delegates to deduplication.list_tables)
+@router.get("/list_tables")
+def get_list_tables():
+    report = list_tables_mod.list_tables()
+    # report is {'tables': [{'name':..., 'rows':...}, ...], 'error': None} or {'tables': [], 'error': '...'}
+    if report.get('error'):
+        # Return a 500-style error structure but keep status 200 semantics for now
+        return {"status": "ERROR", "error": report.get('error'), "tables": report.get('tables', [])}
+    return {"status": "OK", "tables": report.get('tables', [])}
