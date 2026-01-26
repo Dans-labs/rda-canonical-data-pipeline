@@ -33,7 +33,7 @@ services:
       context: .
       dockerfile: Dockerfile
     # Use VERSION env var for the image tag. Falls back to 'latest' if VERSION is not set.
-    image: "ekoindarto/rcdp:${VERSION:-latest}"
+    image: "ekoindarto/rcdp:0.1.3-amd64"
     container_name: rcdp-service
     environment:
       - EXPOSE_PORT=24895

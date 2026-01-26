@@ -1,6 +1,6 @@
 import json
-import psycopg2
-from psycopg2 import sql
+import psycopg
+from psycopg import sql
 
 from src.cannonical_data_pipeline.infra.db import get_conn_params
 
@@ -10,7 +10,7 @@ def list_tables(conn_params=None):
     params = conn_params or get_conn_params()
     conn = None
     try:
-        conn = psycopg2.connect(**params)
+        conn = psycopg.connect(**params)
         with conn.cursor() as cur:
             cur.execute(
                 """

@@ -1,8 +1,8 @@
 try:
-    import psycopg2
-    from psycopg2 import sql
+    import psycopg
+    from psycopg import sql
 except Exception:
-    psycopg2 = None
+    psycopg = None
     sql = None
 
 
@@ -176,14 +176,14 @@ def generate_duplicates_report(conn_params=None, table_name='poc', case_insensit
     """
     report = {'table': table_name, 'columns': {}, 'error': None}
 
-    if psycopg2 is None:
-        report['error'] = 'psycopg2 is required but not installed'
+    if psycopg is None:
+        report['error'] = 'psycopg (psycopg3) is required but not installed'
         return report
 
     params = conn_params or get_conn_params()
     conn = None
     try:
-        conn = psycopg2.connect(**params)
+        conn = psycopg.connect(**params)
     except Exception as exc:
         # Mask password when returning error details
         safe_params = {k: ('***' if k == 'password' and v else v) for k, v in (params.items() if isinstance(params, dict) else [])}

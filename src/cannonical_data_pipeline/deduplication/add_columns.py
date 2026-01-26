@@ -1,7 +1,7 @@
 import json
 import sys
 
-import psycopg2
+import psycopg
 
 from src.cannonical_data_pipeline.infra.db import get_conn_params
 
@@ -45,7 +45,7 @@ def apply_add_columns(conn_params=None, schema: str = "public"):
 
     conn = None
     try:
-        conn = psycopg2.connect(**params)
+        conn = psycopg.connect(**params)
         with conn.cursor() as cur:
             tbl = "deduplicated_institutions_kb"
 
@@ -143,4 +143,3 @@ if __name__ == '__main__':
     res = apply_add_columns()
     sys.stdout.write(json.dumps(res, ensure_ascii=False))
     sys.stdout.flush()
-
