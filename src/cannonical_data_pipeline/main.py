@@ -150,6 +150,8 @@ else:
 pre_startup_routine(app)
 app.include_router(metrics.router, prefix="/api/v1/metrics", tags=["metrics"])
 app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"])
+from src.cannonical_data_pipeline.api.v1 import export as export_mod
+app.include_router(export_mod.router, prefix="/api/v1/export", tags=["export"])
 
 # Root endpoint: expose basic service info (title, version, build number)
 @app.get("/", tags=["root"])

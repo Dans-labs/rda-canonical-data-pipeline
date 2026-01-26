@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import io
 
-import psycopg2
+import psycopg
 
 from cannonical_data_pipeline.infra.commons import app_settings
 from src.cannonical_data_pipeline.infra.db import get_conn_params
@@ -67,7 +67,7 @@ def insert_mapping_csv(csv_path: str, dry_run=False):
     params = get_conn_params()
     conn = None
     try:
-        conn = psycopg2.connect(**params)
+        conn = psycopg.connect(**params)
         cur = conn.cursor()
         # Ensure the institution_mapping table exists and create a unique index on original
         try:
