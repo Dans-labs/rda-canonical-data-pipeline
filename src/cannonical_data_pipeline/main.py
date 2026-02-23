@@ -192,6 +192,6 @@ if __name__ == '__main__':
     print("Database URL:", app_settings.DB_URL)
     logging.info('START Automated Curation Platform')
     logging.info(f'APP_NAME: {APP_NAME}')
-    logging.info(f'Database dialect: {app_settings.DB_DIALECT}')
+    logging.info(f'--Database dialect: {app_settings.DB_DIALECT}')
     logging.info("Database URL: %s", app_settings.DB_URL)
     uvicorn.run(app, host="0.0.0.0", port=EXPOSE_PORT, log_config=log_config)
