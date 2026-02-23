@@ -5,9 +5,9 @@ import sys
 def get_conn_params():
     """Read Postgres connection parameters using app_settings from infra.commons.
 
-    This prefers values from `app_settings` (Dynaconf wrapper) and falls back to
-    environment variables. It returns a dict suitable for psycopg2.connect()
-    and prints a small debug map to stderr (password masked).
+    This prefers values from environment variables first and falls back to app_settings (Dynaconf) and
+    finally to defaults. It returns a dict suitable for psycopg.connect() and prints a small debug map to stderr
+    (password masked).
     """
     # locate repo and secrets path (for debug only)
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -21,26 +21,25 @@ def get_conn_params():
         app_settings = None
 
     def _get_setting(name, env_name=None, default=None):
-        val = None
-        src = None
-        # prefer app_settings
+        """Resolve a setting value giving precedence to environment variables, then app_settings, then default.
+
+        Returns (value, source) where source is one of 'env', 'dynaconf', or 'default'.
+        """
+        # 1) check environment
+        if env_name:
+            val = os.environ.get(env_name)
+            if val is not None:
+                return val, 'env'
+        # 2) dynaconf
         if app_settings is not None:
             try:
                 val = app_settings.get(name)
             except Exception:
                 val = None
             if val is not None:
-                src = 'dynaconf'
-        # fallback to env
-        if val is None and env_name:
-            val = os.environ.get(env_name)
-            if val is not None:
-                src = 'env'
-        # final fallback to provided default
-        if val is None:
-            val = default
-            src = src or 'default'
-        return val, src
+                return val, 'dynaconf'
+        # 3) default
+        return default, 'default'
 
     host, s1 = _get_setting('db_host', 'DB_HOST', 'localhost')
     port, s2 = _get_setting('db_port', 'DB_PORT', 5432)
