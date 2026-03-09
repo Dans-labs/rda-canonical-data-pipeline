@@ -1096,7 +1096,7 @@ wheels = [
 
 [[package]]
 name = "rda-canonical-data-pipeline"
-version = "0.1.6.1"
+version = "0.1.6.3"
 source = { virtual = "." }
 dependencies = [
     { name = "akmi-utils" },
