@@ -6,6 +6,7 @@ import os
 import time
 import zlib
 import logging as logger
+from urllib.parse import quote
 
 from src.cannonical_data_pipeline.infra.db import get_conn_params
 
@@ -14,9 +15,30 @@ from src.cannonical_data_pipeline.infra.db import get_conn_params
 router = APIRouter(prefix="", tags=["export"])
 
 
-@router.get("/db")
-def export_db(request: Request, dump_type: str = Query("both", regex="^(schema|data|both)$", description="Which part to dump: 'schema', 'data', or 'both'")):
-    logger.info("Export requested by %s", dump_type)
+@router.get(
+    "/db",
+    summary="Export database (gzipped SQL dump)",
+    response_description="A gzipped SQL dump streamed as application/gzip",
+)
+def export_db(
+    request: Request,
+    dump_type: str = Query(
+        "both",
+        regex="^(schema|data|both)$",
+        description="Which part to dump: 'schema', 'data', or 'both'",
+        examples={
+            "full": {"summary": "Full dump (schema + data)", "value": "both"},
+            "schema_only": {"summary": "Schema only", "value": "schema"},
+            "data_only": {"summary": "Data only", "value": "data"},
+        },
+    ),
+    force_inserts: bool = Query(
+        False,
+        description="When true, add --inserts and --column-inserts to pg_dump for any dump that includes data (data or both).",
+        examples={"true": {"summary": "Force INSERT-style output", "value": True}},
+    ),
+):
+    logger.info("Export requested: dump_type=%s force_inserts=%s", dump_type, force_inserts)
     """Stream a gzipped pg_dump of the Postgres database on-the-fly.
 
     Query parameter:
@@ -92,9 +114,14 @@ def export_db(request: Request, dump_type: str = Query("both", regex="^(schema|d
 
     # Build pg_dump command
     # If password is available, use a connection URI so pg_dump won't prompt for password.
+    # Percent-encode username/password to safely include characters like '@' or '#'
+    user_enc = ''
+    password_enc = ''
     if password:
+        user_enc = quote(user, safe='') if user is not None else ''
+        password_enc = quote(password, safe='') if password is not None else ''
         # Use the postgresql URI form; note that embedding passwords in args is generally fine inside containers
-        conn_uri = f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+        conn_uri = f"postgresql://{user_enc}:{password_enc}@{host}:{port}/{dbname}"
         cmd = [pg_dump_path, '-d', conn_uri, '-F', 'p']
     else:
         cmd = [pg_dump_path, '-h', host, '-p', port, '-U', user, '-d', dbname, '-F', 'p']
@@ -110,199 +137,248 @@ def export_db(request: Request, dump_type: str = Query("both", regex="^(schema|d
     try:
         logged_cmd = list(cmd)
         if password and logged_cmd:
-            # mask password if present in a URI
-            logged_cmd = [s.replace(password, '*****') for s in logged_cmd]
+            # mask both raw password and percent-encoded password if present in the command
+            try:
+                logged_cmd = [s.replace(password, '*****').replace(password_enc, '*****') for s in logged_cmd]
+            except Exception:
+                logged_cmd = [s.replace(password, '*****') for s in logged_cmd]
         logger.debug("pg_dump command: %s", ' '.join(logged_cmd))
     except Exception:
         pass
 
+    # set dump mode flags
     if dump_type == 'schema':
         cmd.append('-s')
     elif dump_type == 'data':
-        # data-only dump: use --inserts and --column-inserts so INSERT statements are generated
-        # This produces SQL that uses explicit INSERT ... (column list) VALUES (...) statements.
-        # Keep -a (data-only) for compatibility, but add the more explicit insert options.
+        # data-only dump: request only data (no schema)
         cmd.append('-a')
-        # Use long-form flags for clarity; these flags only affect data output and are safe
-        # when streaming to stdout (we don't pass -f here to avoid writing files).
+
+    # Add --inserts/--column-inserts only if explicitly requested by the caller
+    # (force_inserts) and the requested dump includes data (data or both).
+    if force_inserts and dump_type in ('data', 'both'):
         cmd.extend(['--inserts', '--column-inserts'])
 
     # streaming generator: run pg_dump and gzip-compress on the fly
     def stream_generator():
-         logger.info("Starting export for db=%s dump_type=%s; client=%s", dbname, dump_type, client_addr)
-         nonlocal total_bytes
-         import select
-         # helper to safely read from a file-like object (some linters may not infer type)
-         def _safe_read(f):
-             try:
-                 if f is None:
-                     return b''
-                 # read may return bytes
-                 return f.read()
-             except Exception:
-                 return b''
-         env = os.environ.copy()
-         if password:
-             env['PGPASSWORD'] = password
-         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        logger.debug("force_inserts=%s included in pg_dump flags", force_inserts)
+        logger.info("Starting export for db=%s dump_type=%s; client=%s", dbname, dump_type, client_addr)
+        nonlocal total_bytes
+        import select
+        # helper to safely read from a file-like object (some linters may not infer type)
+        def _safe_read(f):
+            try:
+                if f is None:
+                    return b''
+                # read may return bytes
+                return f.read()
+            except Exception:
+                return b''
+        env = os.environ.copy()
+        if password:
+            env['PGPASSWORD'] = password
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
         # Preflight: read stderr non-blocking for a short time to detect immediate failures
-         stderr_parts = []
-         fd_err = proc.stderr.fileno()
-         start = time.time()
-         preflight_timeout = 1.0  # seconds to wait for immediate errors
-         try:
-             while True:
-                 # check if there's stderr available
-                 rlist, _, _ = select.select([fd_err], [], [], 0.1)
-                 if rlist:
-                     try:
-                         chunk = os.read(fd_err, 64 * 1024)
-                     except OSError:
-                         break
-                     if not chunk:
-                         break
-                     stderr_parts.append(chunk.decode(errors='ignore'))
-                     joined = ''.join(stderr_parts).lower()
-                     # look for immediate fatal signals
-                     if any(k in joined for k in ('password', 'fe_sendauth', 'no password supplied',
+        stderr_parts = []
+        fd_err = proc.stderr.fileno()
+        start = time.time()
+        preflight_timeout = 1.0  # seconds to wait for immediate errors
+        # track whether we've started sending bytes to the client
+        started = False
+        comp = None
+        try:
+            while True:
+                # check if there's stderr available
+                rlist, _, _ = select.select([fd_err], [], [], 0.1)
+                if rlist:
+                    try:
+                        chunk = os.read(fd_err, 64 * 1024)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    stderr_parts.append(chunk.decode(errors='ignore'))
+                    joined = ''.join(stderr_parts).lower()
+                    # look for immediate fatal signals
+                    if any(k in joined for k in ('password', 'fe_sendauth', 'no password supplied',
                                                   'aborting because of server version mismatch', 'error')):
-                         # drain remaining stderr
-                         try:
-                             while True:
-                                 chunk = os.read(fd_err, 64 * 1024)
-                                 if not chunk:
-                                     break
-                                 stderr_parts.append(chunk.decode(errors='ignore'))
-                         except Exception:
-                             pass
-                         stderr = ''.join(stderr_parts).strip()
-                         logger.error("pg_dump preflight stderr: %s", stderr)
-                         try:
-                             proc.kill()
-                         except Exception:
-                             pass
-                         raise HTTPException(status_code=500, detail=f"pg_dump failed: {stderr}")
-                 # if process exited during preflight, collect stderr and fail if non-zero
-                 ret = proc.poll()
-                 if ret is not None:
-                     # drain remaining stderr
-                     try:
-                         while True:
-                             chunk = os.read(fd_err, 64 * 1024)
-                             if not chunk:
-                                 break
-                             stderr_parts.append(chunk.decode(errors='ignore'))
-                     except Exception:
-                         pass
-                     stderr = ''.join(stderr_parts).strip()
-                     if ret != 0 or stderr:
-                         try:
-                             proc.kill()
-                         except Exception:
-                             pass
-                         logger.error("pg_dump exited during preflight with code=%s stderr=%s", ret, stderr)
-                         raise HTTPException(status_code=500, detail=f"pg_dump failed: {stderr or f'return code {ret}'}")
-                     break
-                 # timeout if nothing decisive happens
-                 if time.time() - start > preflight_timeout:
-                     break
+                        # drain remaining stderr
+                        try:
+                            while True:
+                                chunk = os.read(fd_err, 64 * 1024)
+                                if not chunk:
+                                    break
+                                stderr_parts.append(chunk.decode(errors='ignore'))
+                        except Exception:
+                            pass
+                        stderr = ''.join(stderr_parts).strip()
+                        logger.error("pg_dump preflight stderr: %s", stderr)
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        # Preflight failures occur before any data is sent; safe to raise HTTPException
+                        raise HTTPException(status_code=500, detail=f"pg_dump failed: {stderr}")
+                # if process exited during preflight, collect stderr and fail if non-zero
+                ret = proc.poll()
+                if ret is not None:
+                    # drain remaining stderr
+                    try:
+                        while True:
+                            chunk = os.read(fd_err, 64 * 1024)
+                            if not chunk:
+                                break
+                            stderr_parts.append(chunk.decode(errors='ignore'))
+                    except Exception:
+                        pass
+                    stderr = ''.join(stderr_parts).strip()
+                    if ret != 0 or stderr:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        logger.error("pg_dump exited during preflight with code=%s stderr=%s", ret, stderr)
+                        # Preflight failure -> safe to raise before streaming starts
+                        raise HTTPException(status_code=500, detail=f"pg_dump failed: {stderr or f'return code {ret}'}")
+                    break
+                # timeout if nothing decisive happens
+                if time.time() - start > preflight_timeout:
+                    break
 
-             # Now it's safe to start streaming stdout (no immediate fatal error)
-             comp = zlib.compressobj(level=9, method=zlib.DEFLATED, wbits=16 + zlib.MAX_WBITS)
+            # Now it's safe to start streaming stdout (no immediate fatal error)
+            comp = zlib.compressobj(level=9, method=zlib.DEFLATED, wbits=16 + zlib.MAX_WBITS)
 
-             # Read first chunk to detect "no output" case
-             chunk = proc.stdout.read(64 * 1024)
-             if not chunk:
-                 try:
-                     # try to collect any stderr for a helpful message
-                     err_bytes = _safe_read(proc.stderr)
-                     stderr = err_bytes.decode(errors='ignore') if err_bytes else "(no stderr available)"
-                 except Exception:
-                     stderr = "(no stderr available)"
-                 logger.error("pg_dump produced no stdout; stderr=%s", stderr)
-                 try:
-                     proc.wait(timeout=1)
-                 except Exception:
-                     pass
-                 raise HTTPException(status_code=500, detail=f"pg_dump failed: {stderr.strip()}")
+            # Read first chunk to detect "no output" case
+            chunk = proc.stdout.read(64 * 1024)
+            if not chunk:
+                try:
+                    # try to collect any stderr for a helpful message
+                    err_bytes = _safe_read(proc.stderr)
+                    stderr = err_bytes.decode(errors='ignore') if err_bytes else "(no stderr available)"
+                except Exception:
+                    stderr = "(no stderr available)"
+                logger.error("pg_dump produced no stdout; stderr=%s", stderr)
+                try:
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+                # No streaming has started yet -> safe to raise HTTPException
+                raise HTTPException(status_code=500, detail=f"pg_dump failed: {stderr.strip()}")
 
-             out = comp.compress(chunk)
-             if out:
-                 total_bytes += len(out)
-                 yield out
+            # mark that we have started sending data
+            started = True
+            out = comp.compress(chunk)
+            if out:
+                total_bytes += len(out)
+                yield out
 
-             # stream remaining stdout
-             while True:
-                 chunk = proc.stdout.read(64 * 1024)
-                 if not chunk:
-                     break
-                 out = comp.compress(chunk)
-                 if out:
-                     total_bytes += len(out)
-                     yield out
+            # stream remaining stdout
+            while True:
+                chunk = proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                out = comp.compress(chunk)
+                if out:
+                    total_bytes += len(out)
+                    yield out
 
-             # flush compressor
-             tail = comp.flush()
-             if tail:
-                 total_bytes += len(tail)
-                 yield tail
+            # flush compressor
+            tail = comp.flush()
+            if tail:
+                total_bytes += len(tail)
+                yield tail
 
-             # log completion (number of gzipped bytes streamed)
-             logger.info("Export completed for db=%s dump_type=%s; bytes_streamed=%d; client=%s", dbname, dump_type, total_bytes, client_addr)
+            # log completion (number of gzipped bytes streamed)
+            logger.info("Export completed for db=%s dump_type=%s; bytes_streamed=%d; client=%s", dbname, dump_type, total_bytes, client_addr)
 
-             # wait and check return code (cannot change status if we've already sent data)
-             returncode = proc.wait()
-             if returncode != 0:
-                 # log or include stderr in logs; do not raise here as response started
-                 try:
-                     err_bytes = _safe_read(proc.stderr)
-                     stderr = err_bytes.decode(errors='ignore') if err_bytes else "(no stderr available)"
-                 except Exception:
-                     stderr = "(no stderr available)"
-                 logger.error("pg_dump finished with non-zero exit code %s; stderr=%s", returncode, stderr)
-                 # We cannot change the response status now; just return (stream will be possibly truncated).
-                 logger.info("Export ended with non-zero exit; db=%s dump_type=%s; bytes_streamed=%d; client=%s", dbname, dump_type, total_bytes, client_addr)
-                 return
+            # wait and check return code (cannot change status if we've already sent data)
+            returncode = proc.wait()
+            if returncode != 0:
+                # log or include stderr in logs; do not raise here as response started
+                try:
+                    err_bytes = _safe_read(proc.stderr)
+                    stderr = err_bytes.decode(errors='ignore') if err_bytes else "(no stderr available)"
+                except Exception:
+                    stderr = "(no stderr available)"
+                logger.error("pg_dump finished with non-zero exit code %s; stderr=%s", returncode, stderr)
+                # We cannot change the response status now; just return (stream will be possibly truncated).
+                logger.info("Export ended with non-zero exit; db=%s dump_type=%s; bytes_streamed=%d; client=%s", dbname, dump_type, total_bytes, client_addr)
+                return
 
-         except HTTPException:
-             try:
-                 proc.kill()
-             except Exception:
-                 pass
-             logger.info("Export failed for db=%s dump_type=%s; client=%s; bytes_streamed=%d", dbname, dump_type, client_addr, total_bytes)
-             raise
-         except Exception:
-             try:
-                 proc.kill()
-             except Exception:
-                 pass
-             raise
-         finally:
-             try:
-                 close_fn = getattr(proc, 'stdout', None)
-                 if close_fn is not None:
-                     close_method = getattr(close_fn, 'close', None)
-                     if callable(close_method):
-                         try:
-                             close_method()
-                         except Exception:
-                             pass
-             except Exception:
-                 pass
-             try:
-                 close_fn = getattr(proc, 'stderr', None)
-                 if close_fn is not None:
-                     close_method = getattr(close_fn, 'close', None)
-                     if callable(close_method):
-                         try:
-                             close_method()
-                         except Exception:
-                             pass
-             except Exception:
-                 pass
-             # final log in case generator exits unexpectedly
-             logger.debug("Export generator finalised for db=%s dump_type=%s; client=%s; bytes_streamed=%d", dbname, dump_type, client_addr, total_bytes)
+        except HTTPException:
+            # If we already started sending data, we must not raise an HTTPException (response already started).
+            if started:
+                logger.info("Export failed after streaming started for db=%s dump_type=%s; client=%s; bytes_streamed=%d", dbname, dump_type, client_addr, total_bytes)
+                try:
+                    # flush compressor so client receives a valid gzip footer
+                    if comp is not None:
+                        try:
+                            tail = comp.flush()
+                            if tail:
+                                total_bytes += len(tail)
+                                yield tail
+                        except Exception:
+                            pass
+                    proc.kill()
+                except Exception:
+                    pass
+                # simply stop iteration to close connection gracefully
+                return
+            else:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                logger.info("Export failed before streaming started for db=%s dump_type=%s; client=%s; bytes_streamed=%d", dbname, dump_type, client_addr, total_bytes)
+                raise
+        except Exception as exc:
+            # Any other exception: if we've already sent bytes, log and stop iteration; otherwise re-raise so FastAPI returns HTTP 500
+            logger.exception("Unexpected error during export: %s", exc)
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            if started:
+                try:
+                    # ensure we flush gzip footer so client doesn't see truncated gzip
+                    if comp is not None:
+                        try:
+                            tail = comp.flush()
+                            if tail:
+                                total_bytes += len(tail)
+                                yield tail
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                logger.info("Export aborted after streaming started for db=%s dump_type=%s; client=%s; bytes_streamed=%d", dbname, dump_type, client_addr, total_bytes)
+                return
+            raise
+        finally:
+            try:
+                close_fn = getattr(proc, 'stdout', None)
+                if close_fn is not None:
+                    close_method = getattr(close_fn, 'close', None)
+                    if callable(close_method):
+                        try:
+                            close_method()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            try:
+                close_fn = getattr(proc, 'stderr', None)
+                if close_fn is not None:
+                    close_method = getattr(close_fn, 'close', None)
+                    if callable(close_method):
+                        try:
+                            close_method()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            # final log in case generator exits unexpectedly
+            logger.debug("Export generator finalised for db=%s dump_type=%s; client=%s; bytes_streamed=%d", dbname, dump_type, client_addr, total_bytes)
 
     filename = f"{dbname}.sql.gz" if dump_type == 'both' else f"{dbname}_{dump_type}.sql.gz"
     headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
