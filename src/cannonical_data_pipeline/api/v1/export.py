@@ -3,7 +3,6 @@ from fastapi.responses import StreamingResponse
 from pathlib import Path
 import subprocess
 import os
-import time
 import zlib
 import logging as logger
 from urllib.parse import quote
@@ -112,19 +111,23 @@ def export_db(
     if not pg_dump_path:
         raise HTTPException(status_code=500, detail='pg_dump not found on PATH or common locations; install postgresql-client in the container or set PG_DUMP_PATH')
 
-    # Build pg_dump command
+    # Build connection args and pg_dump command
     # If password is available, use a connection URI so pg_dump won't prompt for password.
     # Percent-encode username/password to safely include characters like '@' or '#'
     user_enc = ''
     password_enc = ''
+    connection_args = []
     if password:
         user_enc = quote(user, safe='') if user is not None else ''
         password_enc = quote(password, safe='') if password is not None else ''
         # Use the postgresql URI form; note that embedding passwords in args is generally fine inside containers
         conn_uri = f"postgresql://{user_enc}:{password_enc}@{host}:{port}/{dbname}"
-        cmd = [pg_dump_path, '-d', conn_uri, '-F', 'p']
+        connection_args = ['-d', conn_uri]
     else:
-        cmd = [pg_dump_path, '-h', host, '-p', port, '-U', user, '-d', dbname, '-F', 'p']
+        connection_args = ['-h', host, '-p', port, '-U', user, '-d', dbname]
+
+    # base command
+    cmd = [pg_dump_path] + connection_args + ['-F', 'p']
 
     # Log the chosen pg_dump and its version for diagnostics
     try:
@@ -146,17 +149,21 @@ def export_db(
     except Exception:
         pass
 
-    # set dump mode flags
+    # set dump mode flags on the main command
     if dump_type == 'schema':
         cmd.append('-s')
     elif dump_type == 'data':
         # data-only dump: request only data (no schema)
         cmd.append('-a')
+        # Use INSERT-style output instead of COPY for data-only dumps
+        cmd.extend(['--inserts', '--column-inserts'])
 
     # Add --inserts/--column-inserts only if explicitly requested by the caller
     # (force_inserts) and the requested dump includes data (data or both).
     if force_inserts and dump_type in ('data', 'both'):
-        cmd.extend(['--inserts', '--column-inserts'])
+        # avoid duplicating flags if already present (data-only already adds them)
+        if '--inserts' not in cmd:
+            cmd.extend(['--inserts', '--column-inserts'])
 
     # --- PRE-FLIGHT CHECK -------------------------------------------------
     # Run a short, bounded pg_dump to validate connectivity and auth before
@@ -166,10 +173,10 @@ def export_db(
     if password:
         env['PGPASSWORD'] = password
 
-    preflight_cmd = list(cmd)
-    # request schema-only for a short preflight; ensure we don't run a long dump
-    if '-s' not in preflight_cmd:
-        preflight_cmd = preflight_cmd + ['-s']
+    # Construct a safe preflight command that uses only the connection args and a schema-only flag.
+    # This avoids appending -s to a command that already has -a (--data-only), which caused
+    # the error "options -s/--schema-only and -a/--data-only cannot be used together".
+    preflight_cmd = [pg_dump_path] + connection_args + ['-s']
 
     try:
         pre = subprocess.run(preflight_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True, timeout=8)
@@ -193,7 +200,6 @@ def export_db(
         logger.debug("force_inserts=%s included in pg_dump flags", force_inserts)
         logger.info("Starting export for db=%s dump_type=%s; client=%s", dbname, dump_type, client_addr)
         nonlocal total_bytes
-        import select
 
         def _safe_read(f):
             try:
@@ -284,7 +290,7 @@ def export_db(
                         proc.kill()
                 except Exception:
                     pass
-                logger.info("Export aborted after streaming started; bytes_streamed=%d; client=%s", total_bytes, client_addr)
+                logger.info("Export aborted after streaming started; bytes_streamed=%d", total_bytes)
                 return
             # streaming not started: re-raise as HTTPException so FastAPI returns error
             try:

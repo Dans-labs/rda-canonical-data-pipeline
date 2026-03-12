@@ -9,45 +9,47 @@ services:
       - "1080:1080"
       - "1025:1025"
 
-  rcdp-postgres:
-    image: postgres:15
-    container_name: rcdp-postgres
-    environment:
-      - POSTGRES_USER=rcdp
-      - POSTGRES_PASSWORD=my_secret_password
-      - POSTGRES_DB=rda
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      # Mount project resources so the init script can access the SQL dump
-      - ./resources/data/db:/docker-entrypoint-init-resources:ro
-      # Mount the conditional init script into the official init directory
-      - ./resources/scripts/01-conditional-restore.sh:/docker-entrypoint-initdb.d/01-conditional-restore.sh:ro
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U rcdp -d rda" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+#  rcdp-postgres:
+#    image: postgres:15
+#    container_name: rcdp-postgres
+#    environment:
+#      - POSTGRES_USER=rcdp
+#      - POSTGRES_PASSWORD=my_secret_password
+#      - POSTGRES_DB=rda
+#    ports:
+#      - "5433:5432"
+#    volumes:
+#      - postgres-data:/var/lib/postgresql/data
+#      # Mount project resources so the init script can access the SQL dump
+#      - ./resources/data/db:/docker-entrypoint-init-resources:ro
+#      # Mount the conditional init script into the official init directory
+#      - ./resources/scripts/01-conditional-restore.sh:/docker-entrypoint-initdb.d/01-conditional-restore.sh:ro
+#    healthcheck:
+#      test: [ "CMD-SHELL", "pg_isready -U rcdp -d rda" ]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 5
 
   rcdp-service:
     build:
       context: .
       dockerfile: Dockerfile
     # Use VERSION env var for the image tag. Falls back to 'latest' if VERSION is not set.
-    image: "ekoindarto/rcdp:0.1.6.1-amd64"
+    image: "ekoindarto/rcdp:0.1.6.4-amd64"
     container_name: rcdp-service
     environment:
       - EXPOSE_PORT=24895
       - APP_NAME=RDA Service
       - PYTHONPATH=/home/akmi/rcdp/src
       - BASE_DIR=/home/akmi/rcdp
-      - DB_HOST=rcdp-postgres
-      - DB_PORT=5432
-      - DB_NAME=rda
-      - DB_USER=rcdp
-      - DB_PASSWORD=my_secret_password
-      - DB_URL=postgresql+psycopg2://rcdp:my_secret_password@rcdp-postgres:5432/rda
+      # Connect to Postgres running on the macOS host (Docker Desktop exposes host as host.docker.internal)
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5486
+      - DB_NAME=rda_gateway
+      - DB_USER=postgres
+      - DB_PASSWORD=Pg!S3cur3P@ssw0rd2025#RDA
+      # percent-encode special characters in the password for the connection URI
+      - DB_URL=postgresql+psycopg2://postgres:Pg%21S3cur3P%40ssw0rd2025%23RDA@host.docker.internal:5486/rda_gateway
       - MAIL_HOST=maildev
       - MAIL_PORT=1025
       # point to the pg_dump installed in the image (installed by Dockerfile)
@@ -62,8 +64,6 @@ services:
       - ./logs/docker-logs:/home/akmi/rcdp/logs
       - ./resources:/home/akmi/rcdp/resources:ro
     depends_on:
-      rcdp-postgres:
-        condition: service_healthy
       maildev:
         condition: service_started
     restart: unless-stopped
