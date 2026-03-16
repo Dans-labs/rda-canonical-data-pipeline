@@ -1,8 +1,28 @@
 import json
+import logging
 import psycopg
 from psycopg import sql
 
 from src.cannonical_data_pipeline.infra.db import get_conn_params
+
+try:
+    from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+except Exception:
+    import os, sys
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+    except Exception:
+        app_settings = None
+        configure_logging = None
+
+if configure_logging:
+    try:
+        configure_logging(app_settings)
+    except Exception:
+        pass
 
 
 def list_tables(conn_params=None):
@@ -46,7 +66,7 @@ def list_tables(conn_params=None):
 
 def main(conn_params=None):
     report = list_tables(conn_params=conn_params)
-    print(json.dumps(report, default=str))
+    logging.info(json.dumps(report, default=str))
     # exit non-zero if error
     if report.get("error"):
         raise SystemExit(1)

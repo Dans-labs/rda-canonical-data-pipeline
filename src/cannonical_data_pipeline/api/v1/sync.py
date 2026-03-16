@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import time
 import errno
+import logging as logger
 
 from fastapi.params import Depends
 
@@ -168,6 +169,7 @@ def trigger_sync(
     background: bool = Body(False),
     background_tasks: BackgroundTasks = None,
 ):
+    logger.info("start trigger_sync: mode=%s schema=%s background=%s", mode, schema, background)
     """Trigger a sync operation.
 
     - mode: which sync action to run (apply-deduplication|add-columns|update-uuids|run-all|check-duplicates)
@@ -196,6 +198,7 @@ def trigger_sync(
 @router.get("/last")
 def last_run_status():
     """Return the last run status and report."""
+    logger.info("start last_run_status")
     with _last_run_lock:
         return _last_run.copy()
 
@@ -236,6 +239,7 @@ def create_schedule(
     start_immediately: bool = Body(False),
 ):
     """Create a recurring schedule that runs `mode` every `interval_seconds` seconds."""
+    logger.info("start create_schedule: name=%s mode=%s interval_seconds=%s schema=%s start_immediately=%s", name, mode, interval_seconds, schema, start_immediately)
     if interval_seconds <= 0:
         raise HTTPException(status_code=400, detail="interval_seconds must be > 0")
 
@@ -261,6 +265,7 @@ def create_schedule(
 
 @router.get("/schedule")
 def list_schedules():
+    logger.info("start list_schedules")
     with _schedules_lock:
         out = {name: {k: v for k, v in conf.items() if k != "timer" and k != "thread"} for name, conf in _schedules.items()}
     return out
@@ -268,6 +273,7 @@ def list_schedules():
 
 @router.delete("/schedule")
 def delete_schedule(name: str = Query(...)):
+    logger.info("start delete_schedule: name=%s", name)
     with _schedules_lock:
         conf = _schedules.get(name)
         if not conf:
@@ -285,6 +291,7 @@ def delete_schedule(name: str = Query(...)):
 
 @router.post("/manage/enable")
 def enable_schedule(name: str = Body(...)):
+    logger.info("start enable_schedule: name=%s", name)
     with _schedules_lock:
         conf = _schedules.get(name)
         if not conf:
@@ -302,6 +309,7 @@ def enable_schedule(name: str = Body(...)):
 
 @router.post("/manage/disable")
 def disable_schedule(name: str = Body(...)):
+    logger.info("start disable_schedule: name=%s", name)
     with _schedules_lock:
         conf = _schedules.get(name)
         if not conf:
@@ -319,6 +327,7 @@ def disable_schedule(name: str = Body(...)):
 @router.post("/sync-now")
 def sync_now(background_tasks: BackgroundTasks = None):
     """Run the sync pipeline immediately."""
+    logger.info("start sync_now")
     # Ensure only one pipeline process at a time (in-memory) and across processes (file lock)
     with _pipeline_lock:
         global _pipeline_process, _file_lock_fd

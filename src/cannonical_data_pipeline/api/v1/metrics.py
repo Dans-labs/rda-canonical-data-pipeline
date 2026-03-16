@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from datetime import datetime
 from typing import Optional
 from src.cannonical_data_pipeline.deduplication import list_tables as list_tables_mod
+import logging as logger
 
 router = APIRouter(prefix="", tags=["metrics"])
 
@@ -21,6 +22,7 @@ router = APIRouter(prefix="", tags=["metrics"])
 # }
 @router.get("/sync/status")
 def get_sync_status(target: str = Query("all")):
+    logger.info("start get_sync_status: target=%s", target)
     # Replace with actual checks: DB ping, last job timestamps, ES cluster health, API health
     now = datetime.utcnow().isoformat() + "Z"
     return {
@@ -52,6 +54,7 @@ def get_sync_counts(
     es_index: Optional[str] = None,
     since: Optional[str] = None,
 ):
+    logger.info("start get_sync_counts: source_table=%s dedup_table=%s es_index=%s since=%s", source_table, dedup_table, es_index, since)
     # Query DB and ES for counts; return diffs and percentages
     return {
         "source_count": 12000,
@@ -74,6 +77,7 @@ def get_sync_counts(
 # }
 @router.get("/sync/lag")
 def get_sync_lag(window_minutes: int = Query(60, ge=1)):
+    logger.info("start get_sync_lag: window_minutes=%s", window_minutes)
     # Compute lag using last-modified timestamps in DB vs ES `_timestamp` or job logs
     return {
         "avg_lag_seconds": 45.2,
@@ -95,6 +99,7 @@ def get_sync_lag(window_minutes: int = Query(60, ge=1)):
 # }
 @router.get("/ingest/throughput")
 def get_ingest_throughput(window_minutes: int = Query(60, ge=1), granularity: str = Query("minute")):
+    logger.info("start get_ingest_throughput: window_minutes=%s granularity=%s", window_minutes, granularity)
     # Use job logs or ES ingest stats to build metrics
     return {
         "window_minutes": window_minutes,
@@ -116,6 +121,7 @@ def get_ingest_throughput(window_minutes: int = Query(60, ge=1), granularity: st
 # }
 @router.get("/dedup/stats")
 def get_dedup_stats():
+    logger.info("start get_dedup_stats")
     # Query deduplicated table and mapping tables for counts
     return {
         "total_rows": 12000,
@@ -134,6 +140,7 @@ def get_dedup_stats():
 # }
 @router.get("/errors")
 def get_errors(since: Optional[str] = None, limit: int = Query(50, ge=1, le=1000)):
+    logger.info("start get_errors: since=%s limit=%s", since, limit)
     return {
         "total_errors": 0,
         "errors": []
@@ -145,6 +152,7 @@ def get_errors(since: Optional[str] = None, limit: int = Query(50, ge=1, le=1000
 # {"status":"OK","checks":{"db":true,"es":true,"queue":true}}
 @router.get("/health")
 def health():
+    logger.info("start health")
     # Perform quick DB and ES pings
     return {"status": "OK", "checks": {"db": True, "es": True, "queue": True}}
 
@@ -152,6 +160,7 @@ def health():
 # Purpose: return list of tables in public schema (delegates to deduplication.list_tables)
 @router.get("/list_tables")
 def get_list_tables():
+    logger.info("start get_list_tables")
     report = list_tables_mod.list_tables()
     # report is {'tables': [{'name':..., 'rows':...}, ...], 'error': None} or {'tables': [], 'error': '...'}
     if report.get('error'):

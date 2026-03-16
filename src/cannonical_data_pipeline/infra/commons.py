@@ -5,7 +5,6 @@ import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import akmi_utils as a_commons
 import tomli
 from dynaconf import Dynaconf
 
@@ -30,6 +29,25 @@ if not base_dir:
 
 app_settings = Dynaconf(root_path=os.path.join(os.environ["BASE_DIR"], 'conf'), settings_files=["*.toml"],
                     environments=True)
+
+# --- logging defaults --------------------------------------------------
+# Derive module-level defaults from app_settings so other modules can rely on
+# a consistent default even when configure_logging is called without a
+# specific app_settings object.
+LOG_FILE_DEFAULT = None
+LOG_LEVEL_DEFAULT = logging.INFO
+LOG_FORMAT_DEFAULT = '%(asctime)s %(levelname)s %(name)s : %(message)s'
+try:
+    if app_settings is not None:
+        # Dynaconf exposes settings as attributes or via .get(); use getattr to be safe
+        LOG_FILE_DEFAULT = getattr(app_settings, 'LOG_FILE', LOG_FILE_DEFAULT)
+        LOG_LEVEL_DEFAULT = getattr(app_settings, 'LOG_LEVEL', LOG_LEVEL_DEFAULT)
+        LOG_FORMAT_DEFAULT = getattr(app_settings, 'LOG_FORMAT', LOG_FORMAT_DEFAULT)
+except Exception:
+    # fallback to the hard-coded defaults above
+    LOG_FILE_DEFAULT = LOG_FILE_DEFAULT
+    LOG_LEVEL_DEFAULT = LOG_LEVEL_DEFAULT
+    LOG_FORMAT_DEFAULT = LOG_FORMAT_DEFAULT
 
 def get_project_details(base_dir: str, keys: list):
     with open(os.path.join(base_dir, 'pyproject.toml'), 'rb') as file:
@@ -117,3 +135,41 @@ def send_mail(subject: str, body: str, to: list | None = None, from_addr: str | 
 
     logging.error("All attempts to send email failed (%d attempts)", retries)
     return False
+
+def configure_logging(app_settings=None):
+    """Configure the global logging using the project's app_settings.
+
+    This function is safe to call multiple times: the first call configures
+    logging.basicConfig with filename, level and format from app_settings if
+    no handlers are configured yet. If app_settings is None or configuration
+    fails, a reasonable default is used.
+    """
+    import logging
+    try:
+        # If logging already configured by the process (handlers attached), skip
+        root = logging.getLogger()
+        if root.handlers:
+            return
+
+        # Determine settings
+        if app_settings is not None:
+            # prefer explicit values from the provided app_settings object
+            log_file = getattr(app_settings, 'LOG_FILE', LOG_FILE_DEFAULT)
+            log_level = getattr(app_settings, 'LOG_LEVEL', LOG_LEVEL_DEFAULT)
+            log_format = getattr(app_settings, 'LOG_FORMAT', LOG_FORMAT_DEFAULT)
+        else:
+            # fall back to module-level defaults (derived from app_settings at import time)
+            log_file = LOG_FILE_DEFAULT
+            log_level = LOG_LEVEL_DEFAULT
+            log_format = LOG_FORMAT_DEFAULT
+
+        if log_file:
+            logging.basicConfig(filename=log_file, level=log_level, format=log_format)
+        else:
+            logging.basicConfig(level=log_level, format=log_format)
+    except Exception:
+        # Last-resort basic logging
+        try:
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s : %(message)s')
+        except Exception:
+            pass

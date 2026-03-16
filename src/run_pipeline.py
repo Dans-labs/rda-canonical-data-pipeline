@@ -21,6 +21,34 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import logging
+
+# Try to import app_settings.configure_logging so we use the same logging config as main
+try:
+    from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+except Exception:
+    import os
+    # best-effort: add repo root and try again
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+    except Exception:
+        app_settings = None
+        configure_logging = None
+
+# configure logging consistently via commons.configure_logging
+if configure_logging:
+    try:
+        configure_logging(app_settings)
+    except Exception:
+        # fallback to a basic config
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s : %(message)s')
+else:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s : %(message)s')
+
+logger = logging.getLogger('run_pipeline')
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / 'src' / 'cannonical_data_pipeline' / 'deduplication'
 SCRIPTS = [
@@ -43,6 +71,7 @@ def run_script(path: Path, noop: bool) -> dict:
       - json: parsed JSON from stdout if parseable else None
       - error: error message if returncode != 0 or parse flagged error
     """
+    logging.info("Running script: %s", path)
     res = {
         'name': path.stem,
         'path': str(path),
@@ -97,25 +126,25 @@ def main():
 
     # Run all scripts sequentially (always continue to next step)
     for name, path in SCRIPTS:
-        print(f"\n--- Running step: {name} ({path}) ---")
+        logger.info(f"\n--- Running step: {name} ({path}) ---")
         result = run_script(path, noop=False)
         overall['steps'].append(result)
 
         # Print outputs for visibility
         if result['stdout']:
-            print(f"[stdout]\n{result['stdout']}")
+            logger.info("[stdout]\n%s", result['stdout'])
         if result['stderr']:
-            print(f"[stderr]\n{result['stderr']}", file=sys.stderr)
+            logger.error("[stderr]\n%s", result['stderr'])
 
         if result.get('error'):
-            print(f"[error] Step {name} failed: {result['error']}", file=sys.stderr)
+            logger.error("[error] Step %s failed: %s", name, result['error'])
             overall['success'] = False
         else:
-            print(f"[ok] Step {name} completed successfully")
+            logger.info("[ok] Step %s completed successfully", name)
 
     # Summarize and exit with non-zero on failure
-    print('\n=== Pipeline summary ===')
-    print(json.dumps(overall, indent=2, ensure_ascii=False))
+    logger.info('\n=== Pipeline summary ===')
+    logger.info(json.dumps(overall, indent=2, ensure_ascii=False))
     if not overall['success']:
         sys.exit(2)
 

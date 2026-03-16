@@ -1,5 +1,25 @@
 import os
 import sys
+import logging
+try:
+    from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+except Exception:
+    # best-effort: add repo root and try again
+    import os, sys
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+    except Exception:
+        app_settings = None
+        configure_logging = None
+
+if configure_logging:
+    try:
+        configure_logging(app_settings)
+    except Exception:
+        pass
 
 
 def get_conn_params():
@@ -65,8 +85,14 @@ def get_conn_params():
     # print per-key source debug
     try:
         src_map = {'host': s1, 'port': s2, 'dbname': s3, 'user': s4, 'password': s5}
-        print(f"[debug] config sources: {src_map} (secrets_path={secrets_path})", file=sys.stderr)
-        print(f"[debug] conn params: {masked}", file=sys.stderr)
+        if app_settings:
+            try:
+                src_map = src_map  # existing code context
+            except Exception:
+                src_map = None
+        masked = masked if 'masked' in locals() else None
+        logging.debug("[debug] config sources: %s (secrets_path=%s)", src_map, secrets_path)
+        logging.debug("[debug] conn params: %s", masked)
     except Exception:
         pass
 

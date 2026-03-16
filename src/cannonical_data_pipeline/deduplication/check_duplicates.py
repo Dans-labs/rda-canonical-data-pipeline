@@ -5,8 +5,27 @@ except Exception:
     psycopg = None
     sql = None
 
-
-from src.cannonical_data_pipeline.infra.db import get_conn_params
+# Attempt to import get_conn_params from package; if running as a script the 'src' package
+# may not be on sys.path, so add project root to sys.path and retry.
+try:
+    from src.cannonical_data_pipeline.infra.db import get_conn_params
+except Exception:
+    import os
+    import sys
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from src.cannonical_data_pipeline.infra.db import get_conn_params
+    except Exception:
+        # As a last resort, try importing by manipulating importlib
+        try:
+            from importlib import import_module
+            mod = import_module('src.cannonical_data_pipeline.infra.db')
+            get_conn_params = getattr(mod, 'get_conn_params')
+        except Exception:
+            # leave get_conn_params undefined; callers will handle the error
+            get_conn_params = None
 
 
 def get_table_columns(conn, table_name):
@@ -233,3 +252,15 @@ def generate_duplicates_report(conn_params=None, table_name='poc', case_insensit
                 conn.close()
         except Exception:
             pass
+
+
+if __name__ == '__main__':
+    # run from CLI and print JSON result to stdout (simple entry like apply_deduplication.py)
+    try:
+        res = generate_duplicates_report()
+    except Exception as exc:
+        res = {'success': False, 'error': str(exc)}
+    import json
+    import sys
+    sys.stdout.write(json.dumps(res, ensure_ascii=False))
+    sys.stdout.flush()

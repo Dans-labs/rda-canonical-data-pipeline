@@ -1,5 +1,6 @@
 import csv
 import json
+import logging
 import os
 import sys
 import traceback
@@ -10,7 +11,25 @@ import io
 
 import psycopg
 
-from cannonical_data_pipeline.infra.commons import app_settings
+try:
+    from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+except Exception:
+    import os, sys
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from src.cannonical_data_pipeline.infra.commons import app_settings, configure_logging
+    except Exception:
+        app_settings = None
+        configure_logging = None
+
+if configure_logging:
+    try:
+        configure_logging(app_settings)
+    except Exception:
+        pass
+
 from src.cannonical_data_pipeline.infra.db import get_conn_params
 
 
@@ -41,7 +60,7 @@ def insert_mapping_csv(csv_path: str, dry_run=False):
     repaired_text = re.sub(r'"\s*(?=[A-Za-z0-9])', '",', raw_text)
     repair_applied = repaired_text != raw_text
     try:
-        print(f"[debug] csv_repair_applied={repair_applied}", file=sys.stderr)
+        logging.debug("[debug] csv_repair_applied=%s", repair_applied)
     except Exception:
         pass
 
@@ -174,15 +193,15 @@ if __name__ == '__main__':
             mc = mc.replace('{env[BASE_DIR]}', base)
         resolved_path = Path(mc).resolve()
         if not resolved_path.exists():
-            print(f"CSV file not found at resolved path: {resolved_path}", file=sys.stderr)
+            logging.error("CSV file not found at resolved path: %s", resolved_path)
             sys.exit(1)
     else:
-        print("app_settings.data_institution_mapping is not configured", file=sys.stderr)
+        logging.error("app_settings.data_institution_mapping is not configured")
         sys.exit(1)
 
     # Run a dry-run to validate the CSV and report
     res = insert_mapping_csv(csv_path=resolved_path, dry_run=False)
-    print(json.dumps(res, indent=2, ensure_ascii=False))
+    logging.info(json.dumps(res, indent=2, ensure_ascii=False))
     # exit non-zero on error
     if res.get('error'):
         sys.exit(1)

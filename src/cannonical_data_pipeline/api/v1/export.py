@@ -37,7 +37,7 @@ def export_db(
         examples={"true": {"summary": "Force INSERT-style output", "value": True}},
     ),
 ):
-    logger.info("Export requested: dump_type=%s force_inserts=%s", dump_type, force_inserts)
+    logger.info("start export_db: dump_type=%s force_inserts=%s", dump_type, force_inserts)
     """Stream a gzipped pg_dump of the Postgres database on-the-fly.
 
     Query parameter:
@@ -156,6 +156,10 @@ def export_db(
         # data-only dump: request only data (no schema)
         cmd.append('-a')
         # Use INSERT-style output instead of COPY for data-only dumps
+        cmd.extend(['--inserts', '--column-inserts'])
+    else:  # both
+        # full dump: include schema and data; prefer INSERT-style output instead of COPY
+        # (this makes restore more portable when COPY isn't desired)
         cmd.extend(['--inserts', '--column-inserts'])
 
     # Add --inserts/--column-inserts only if explicitly requested by the caller
