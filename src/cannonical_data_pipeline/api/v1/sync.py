@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Body, Query
 from typing import Optional, Dict, Any
 from datetime import datetime
 import threading
+import requests
 import uuid
 import subprocess
 import sys
@@ -11,7 +12,9 @@ import time
 import errno
 import logging as logger
 
-from fastapi.params import Depends
+from src.cannonical_data_pipeline.infra.commons import app_settings
+
+# ...existing code...
 
 from src.cannonical_data_pipeline.deduplication.apply_deduplication import apply_deduplication
 from src.cannonical_data_pipeline.deduplication.add_columns import apply_add_columns
@@ -403,3 +406,78 @@ def sync_now(background_tasks: BackgroundTasks = None):
         background_tasks.add_task(_monitor_pipeline)
 
     return {"accepted": True, "task_id": task_id}
+
+
+@router.post(
+    "/es-sync",
+    summary="Trigger Elasticsearch sync on configured RDA gateway",
+    description="""
+Trigger a background ingestion that indexes the application's database into the
+search index. This action requests the configured indexing service to start
+processing; the actual indexing work is performed by that service.
+
+Authentication: you must call this endpoint with the application's API key
+or bearer token (see your administrator for credentials).
+
+Behavior: the endpoint asks the indexing service to start an ingest job and
+returns the service's response (typically a short status or job identifier).
+
+Example curl:
+
+  curl -X POST "http://<service>/api/v1/sync/es-sync" \
+    -H "Authorization: Bearer <YOUR_API_KEY>"
+""",
+)
+def es_sync():
+    logger.info("start es_sync")
+    """Trigger a sync on the configured RDA gateway endpoint.
+
+    This reads `RDA_GATEWAY_URL` and `RDA_GATEWAY_SERVICE_API_KEY` from `app_settings` (e.g. from conf/.secrets.toml)
+    and issues a POST to that URL with the configured API key in the `x-api-key` header.
+
+    Example: if `RDA_GATEWAY_URL` is `http://rda-gateway:3000/knowledge-base/index/deposits`, this will POST to that URL.
+    """
+    url = None
+    api_key = None
+
+    try:
+        url = getattr(app_settings, 'RDA_GATEWAY_URL', None) or app_settings.get('RDA_GATEWAY_URL')
+        logger.info(f"RDA_GATEWAY_URL={url}")
+    except Exception:
+        url = None
+        logger.error("es_sync missing RDA_GATEWAY_URL in app_settings")
+    try:
+        api_key = getattr(app_settings, 'RDA_GATEWAY_SERVICE_API_KEY', None) or app_settings.get('RDA_GATEWAY_SERVICE_API_KEY')
+        logger.info(f"RDA_GATEWAY_SERVICE_API_KEY={api_key}")
+    except Exception:
+        api_key = None
+        logger.error("es_sync missing RDA_GATEWAY_SERVICE_API_KEY in app_settings")
+
+    logger.info("start es_sync: url=%s", url)
+
+    if not url:
+        logger.error("es_sync missing RDA_GATEWAY_URL in app_settings")
+        raise HTTPException(status_code=500, detail="RDA_GATEWAY_URL not configured")
+
+    if not api_key:
+        logger.error("es_sync missing RDA_GATEWAY_SERVICE_API_KEY in app_settings")
+        raise HTTPException(status_code=500, detail="RDA_GATEWAY_SERVICE_API_KEY not configured")
+
+    try:
+        resp = requests.post(url, headers={"x-api-key": api_key}, timeout=60)
+    except requests.RequestException as exc:
+        logger.exception("es_sync request failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    logger.info("es_sync upstream returned status=%s content_length=%s", resp.status_code, len(resp.content) if resp.content is not None else 0)
+
+    if resp.status_code >= 400:
+        excerpt = resp.text[:200] if resp.text else ""
+        logger.error("es_sync upstream error: status=%s excerpt=%s", resp.status_code, excerpt)
+        raise HTTPException(status_code=502, detail=f"upstream {resp.status_code}: {excerpt}")
+
+    try:
+        return resp.json()
+    except ValueError:
+        return {"status_code": resp.status_code, "content": resp.text}
+

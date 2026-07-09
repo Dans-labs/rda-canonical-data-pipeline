@@ -20,6 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 # Import app settings after sys.path has been adjusted
 from src.cannonical_data_pipeline.infra.commons import app_settings, get_project_details, configure_logging
 from src.cannonical_data_pipeline.api.v1 import metrics, sync
+import importlib
 
 import requests as http_request
 
@@ -107,6 +108,10 @@ app.include_router(metrics.router, prefix="/api/v1/metrics", tags=["metrics"])
 app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"], dependencies=[Depends(auth_header)])
 from src.cannonical_data_pipeline.api.v1 import export as export_mod
 app.include_router(export_mod.router, prefix="/api/v1/export", tags=["export"], dependencies=[Depends(auth_header)])
+
+# import the module named 'import' using importlib because 'import' is a Python keyword
+import_mod = importlib.import_module('src.cannonical_data_pipeline.api.v1.import')
+app.include_router(import_mod.router, prefix="/api/v1/import", tags=["import"], dependencies=[Depends(auth_header)])
 
 # Root endpoint: expose basic service info (title, version, build number)
 @app.get("/", tags=["root"])

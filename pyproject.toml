@@ -1,7 +1,7 @@
 [project]
 name = "rda-canonical-data-pipeline"
 title = "RDA Canonical Data Pipeline"
-version = "0.1.6.9"
+version = "0.1.7.1"
 description = "A transaction-safe data pipeline that cleans, synchronizes, and indexes data from PostgreSQL and external APIs into Elasticsearch."
 authors = [
     {name = "Eko Indarto", email = "eko.indarto@dans.knaw.nl"}
@@ -21,4 +21,5 @@ dependencies = [
     "requests>=2.32.5",
     "tomli>=2.3.0",
     "uvicorn>=0.40.0",
+    "python-multipart>=0.0.22",
 ]

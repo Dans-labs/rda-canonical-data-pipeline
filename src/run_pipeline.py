@@ -22,6 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 import logging
+import os
 
 # Try to import app_settings.configure_logging so we use the same logging config as main
 try:
@@ -50,16 +51,17 @@ else:
 
 logger = logging.getLogger('run_pipeline')
 
-SCRIPT_DIR = Path(__file__).resolve().parents[1] / 'src' / 'cannonical_data_pipeline' / 'deduplication'
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = REPO_ROOT / 'src' / 'cannonical_data_pipeline' / 'deduplication'
 SCRIPTS = [
-    ('insert_mapping', SCRIPT_DIR / 'insert_mapping.py'),
-    ('apply_deduplication', SCRIPT_DIR / 'apply_deduplication.py'),
-    ('add_columns', SCRIPT_DIR / 'add_columns.py'),
-    ('update_uuids', SCRIPT_DIR / 'update_uuids.py'),
+    ('insert_mapping', SCRIPT_DIR / 'insert_mapping.py', 'src.cannonical_data_pipeline.deduplication.insert_mapping'),
+    ('apply_deduplication', SCRIPT_DIR / 'apply_deduplication.py', 'src.cannonical_data_pipeline.deduplication.apply_deduplication'),
+    ('add_columns', SCRIPT_DIR / 'add_columns.py', 'src.cannonical_data_pipeline.deduplication.add_columns'),
+    ('update_uuids', SCRIPT_DIR / 'update_uuids.py', 'src.cannonical_data_pipeline.deduplication.update_uuids'),
 ]
 
 
-def run_script(path: Path, noop: bool) -> dict:
+def run_script(path: Path, module: str, noop: bool) -> dict:
     """Run one script and return a result dict.
 
     Result keys:
@@ -92,9 +94,22 @@ def run_script(path: Path, noop: bool) -> dict:
         res['returncode'] = None
         return res
 
-    cmd = [sys.executable, str(path)]
+    cmd = [sys.executable, '-m', module]
+    env = os.environ.copy()
+    repo_root_str = str(REPO_ROOT)
+    env['PYTHONPATH'] = (
+        repo_root_str if not env.get('PYTHONPATH')
+        else f"{repo_root_str}{os.pathsep}{env['PYTHONPATH']}"
+    )
     try:
-        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=repo_root_str,
+            env=env,
+        )
         res['returncode'] = completed.returncode
         res['stdout'] = completed.stdout
         res['stderr'] = completed.stderr
@@ -125,9 +140,9 @@ def main():
     overall = {'steps': [], 'success': True}
 
     # Run all scripts sequentially (always continue to next step)
-    for name, path in SCRIPTS:
+    for name, path, module in SCRIPTS:
         logger.info(f"\n--- Running step: {name} ({path}) ---")
-        result = run_script(path, noop=False)
+        result = run_script(path, module=module, noop=False)
         overall['steps'].append(result)
 
         # Print outputs for visibility
